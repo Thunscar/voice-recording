@@ -1,0 +1,253 @@
+package com.stitchcodes.recording.service
+
+import android.Manifest.permission.RECORD_AUDIO
+import android.annotation.SuppressLint
+import android.content.Context
+import android.media.*
+import android.os.*
+import android.util.Log
+import com.stitchcodes.recording.ContextHolder
+import com.stitchcodes.recording.utils.PermsUtils
+import com.stitchcodes.recording.vad.sliero.SlieroVadDetector
+import java.io.*
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.LinkedBlockingQueue
+
+@SuppressLint("MissingPermission")
+class VoiceRecordHandler {
+
+    companion object {
+        private const val TAG = "VoiceRecordHandler"
+
+        //音频采样率
+        private const val SAMPLE_RATE = 16000
+
+        //一秒钟有多少帧音频
+        private const val FRAME_COUNT_SECOND = 20
+
+        //一秒钟有多少帧音频有声音算是这一秒有声音
+        private const val CONFIDENCE_SECOND = 5
+
+        //超过多少秒没有声音结算保存音频
+        private const val NO_VOICE_TIMEOUT = 5
+
+        //文件的最大秒数
+        private const val FILE_SECONDS = 60 * 5
+
+        //有多少秒有声音才进行保存
+        private const val DURATION_SECONDS = 3
+    }
+
+    private lateinit var audioRecord: AudioRecord
+    private lateinit var voiceRecordHandler: HandlerThread
+    private lateinit var voiceSaveHandler: HandlerThread
+    private val voiceQueue = LinkedBlockingQueue<VoiceFrame>()
+    private var isRecording = false
+    private lateinit var voiceDetector: SlieroVadDetector
+
+    fun init(context: Context): Boolean {
+        //检查权限
+        val hasPerms = PermsUtils.hasPerms(context, RECORD_AUDIO)
+        if (hasPerms) {
+            val channelConfig = AudioFormat.CHANNEL_IN_MONO
+            val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+            val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelConfig, audioFormat)
+            audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, channelConfig, audioFormat, minBufferSize)
+            voiceRecordHandler = HandlerThread("VoiceRecordHandler")
+            voiceSaveHandler = HandlerThread("VoiceSaveHandler")
+            voiceDetector = SlieroVadDetector(0.7f, 0.5f, SAMPLE_RATE, 100, 100)
+            Log.d(TAG, "voice record handler init success")
+            return true
+        } else {
+            Log.e(TAG, "voice record handler init error, missing permission")
+            return false
+        }
+    }
+
+    fun start() {
+        if (!::audioRecord.isInitialized || !::voiceRecordHandler.isInitialized || !::voiceSaveHandler.isInitialized) {
+            Log.e(TAG, "Voice Handler has not init, please init first")
+            return
+        }
+        voiceRecordHandler.start()
+        voiceSaveHandler.start()
+        val recordHandler = Handler(voiceRecordHandler.looper)
+        val saveHandler = Handler(voiceSaveHandler.looper)
+        isRecording = true
+        recordHandler.post(recordRunnable)
+        saveHandler.post(saveRunnable)
+    }
+
+    fun stop() {
+        isRecording = false
+        if (::audioRecord.isInitialized) {
+            audioRecord.stop()
+            audioRecord.release()
+        }
+        voiceQueue.clear()
+    }
+
+    private val recordRunnable = object : Runnable {
+        private var isSpeed = false
+        override fun run() {
+            audioRecord.startRecording()
+            while (isRecording) {
+                val voiceBytes = ByteArray(SAMPLE_RATE * 2 / FRAME_COUNT_SECOND)
+                val read = audioRecord.read(voiceBytes, 0, voiceBytes.size)
+                if (read > 0 && read == voiceBytes.size) {
+                    val result = voiceDetector.apply(voiceBytes, true)
+                    if (result.isNotEmpty()) {
+                        if (result.containsKey("start")) {
+                            isSpeed = true
+                        }
+                        if (result.containsKey("end")) {
+                            isSpeed = false
+                        }
+                    }
+                    voiceQueue.put(VoiceFrame(voiceBytes, isSpeed))
+                }
+            }
+            Log.d(TAG, "Voice recording end")
+        }
+    }
+
+    private val saveRunnable = object : Runnable {
+
+        //音频帧计数
+        private var voiceIndex = 0
+
+        //一秒内有声音的数量
+        private var voiceInSecond = 0
+
+        //连续没有声音的秒数
+        private var countNoVoice = 0
+
+        //每秒的数据缓存后统一写入文件
+        private val dataInSecond = ByteArrayOutputStream()
+
+        //保存的秒数
+        private var saveSeconds = 0
+
+        //临时保存的数据
+        private val pcmData = ByteArrayOutputStream()
+
+        //保存文件名称
+        private var saveFileName: String? = null
+
+        //整个保存时长里有多少秒有声音
+        private var voiceInDuration = 0
+
+        override fun run() {
+            Log.d(TAG, "record saver start")
+            while (isRecording) {
+                val voice = voiceQueue.poll()
+                if (voice == null) {
+                    Thread.sleep(20)
+                    continue
+                }
+                voiceIndex = (voiceIndex + 1) % FRAME_COUNT_SECOND
+                dataInSecond.write(voice.bytes)
+                //若有声音 计数+1
+                if (voice.hasVoice) voiceInSecond++
+                if (voiceIndex == 0) {
+                    //处理了1s的数据 开始结算
+                    //有声音的数量大于每秒置信度个数 则认为有那一秒有声音
+                    if (voiceInSecond > CONFIDENCE_SECOND) {
+                        Log.d(TAG, "has voice in one second")
+                        //有声音
+                        countNoVoice = 0
+                        if (saveFileName == null) {
+                            saveFileName = genSaveFileName()
+                        }
+                        //整个保存文件中的声音秒数+1
+                        voiceInDuration++
+                        //若超出了保存时间上限 则将临时数据保存到文件
+                        if (saveSeconds >= FILE_SECONDS) {
+                            saveAsWav(pcmData, File(ContextHolder.appContext().cacheDir, saveFileName!!))
+                            resetSaveState()
+                            Log.d(TAG, "save to file while over limit")
+                        }
+                    } else {
+                        Log.d(TAG, "has not voice in one second")
+                        //无声音
+                        countNoVoice++
+                        if (countNoVoice >= NO_VOICE_TIMEOUT && saveFileName != null) {
+                            if (voiceInDuration >= DURATION_SECONDS) {
+                                //保存文件
+                                saveAsWav(pcmData, File(ContextHolder.appContext().cacheDir, saveFileName!!))
+                                resetSaveState()
+                                Log.d(TAG, "save to file while loss voice")
+                            } else {
+                                resetSaveState()
+                                Log.d(TAG, "abandon voice file while voice duration not enough")
+                            }
+                        }
+                    }
+                    if (saveFileName != null) {
+                        pcmData.write(dataInSecond.toByteArray())
+                        saveSeconds++
+                    }
+                    dataInSecond.reset()
+                    voiceInSecond = 0
+                }
+            }
+            if (saveFileName != null && voiceInDuration >= DURATION_SECONDS) {
+                //保存文件
+                saveAsWav(pcmData, File(ContextHolder.appContext().cacheDir, saveFileName!!))
+                resetSaveState()
+                Log.d(TAG, "save to file while stop recording")
+            }
+        }
+
+        //重置文件保存状态
+        private fun resetSaveState() {
+            pcmData.reset()
+            saveFileName = null
+            voiceInDuration = 0
+            saveSeconds = 0
+        }
+
+        private fun genSaveFileName(): String {
+            val pattern = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
+            return pattern.format(LocalDateTime.now()) + ".wav"
+        }
+
+        fun saveAsWav(
+            baos: ByteArrayOutputStream, file: File, sampleRate: Int = SAMPLE_RATE, channels: Int = 1, bitsPerSample: Int = 16
+        ) {
+            val pcmData = baos.toByteArray()
+            val byteRate = sampleRate * channels * bitsPerSample / 8
+            val blockAlign = (channels * bitsPerSample / 8).toShort()
+            val dataSize = pcmData.size
+
+            val fos = FileOutputStream(file)
+            val dos = DataOutputStream(fos)
+
+            // RIFF header
+            dos.writeBytes("RIFF")
+            dos.writeInt(Integer.reverseBytes(36 + dataSize)) // 文件大小-8
+            dos.writeBytes("WAVE")
+
+            // fmt subchunk
+            dos.writeBytes("fmt ")
+            dos.writeInt(Integer.reverseBytes(16))             // Subchunk1Size
+            dos.writeShort(java.lang.Short.reverseBytes(1.toShort()).toInt()) // PCM format
+            dos.writeShort(java.lang.Short.reverseBytes(channels.toShort()).toInt())
+            dos.writeInt(Integer.reverseBytes(sampleRate))
+            dos.writeInt(Integer.reverseBytes(byteRate))
+            dos.writeShort(java.lang.Short.reverseBytes(blockAlign).toInt())
+            dos.writeShort(java.lang.Short.reverseBytes(bitsPerSample.toShort()).toInt())
+
+            // data subchunk
+            dos.writeBytes("data")
+            dos.writeInt(Integer.reverseBytes(dataSize))
+            dos.write(pcmData)  // 写入PCM数据
+
+            dos.flush()
+            dos.close()
+        }
+    }
+}
