@@ -8,10 +8,8 @@ import android.os.*
 import android.util.Log
 import com.stitchcodes.recording.ContextHolder
 import com.stitchcodes.recording.utils.PermsUtils
-import com.stitchcodes.recording.vad.sliero.SlieroVadDetector
+import com.stitchcodes.recording.vad.SlieroVadDetector
 import java.io.*
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.LinkedBlockingQueue
