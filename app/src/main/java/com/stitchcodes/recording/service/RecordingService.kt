@@ -2,9 +2,7 @@ package com.stitchcodes.recording.service
 
 import android.annotation.SuppressLint
 import android.app.*
-import android.content.Intent
-import android.os.Handler
-import android.os.HandlerThread
+import android.content.*
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -25,12 +23,13 @@ class RecordingService : Service() {
         super.onCreate()
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID).setContentTitle("人声录制").setContentText("人声自动录制中...")
-            .setSmallIcon(R.drawable.ic_launcher_foreground).setPriority(NotificationCompat.PRIORITY_HIGH).build()
+            .setSmallIcon(R.drawable.ic_launcher_foreground_han).setPriority(NotificationCompat.PRIORITY_HIGH).build()
         startForeground(NOTIFICATION_ID, notification)
     }
 
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "start recording service")
         voiceHandler = VoiceRecordHandler()
         voiceHandler.init(this)
         voiceHandler.start()
