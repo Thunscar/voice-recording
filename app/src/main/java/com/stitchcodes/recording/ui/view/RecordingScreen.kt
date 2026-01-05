@@ -4,6 +4,7 @@ import android.Manifest.permission.*
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -79,16 +80,20 @@ class RecordingViewModel : ViewModel() {
     fun loadRecordingFiles() {
         val nodes = FoldPickerLauncher.getRootNode()?.listChildren() ?: return
         val dateFormat = SimpleDateFormat("yyyyMMddHHmmss", Locale.getDefault())
-        val dateStrFormat = SimpleDateFormat("MM月dd日 HH:mm ss", Locale.getDefault())
+        val dateStrFormat = SimpleDateFormat("MM月dd日 HH:mm", Locale.getDefault())
         val fileList = LinkedList<RecordingFile>()
         for (node in nodes) {
-            if (node.size == 0L) continue
-            val nameSplit = node.name.split(".")
-            if (nameSplit.size != 2) continue
-            val dateTime = dateFormat.parse(nameSplit[0]) ?: continue
-            val wavDur = (WavUtils.getWavDurationMs(node.uri) / 1000L).toInt()
-            val dateTimeStr = dateStrFormat.format(dateTime)
-            fileList.addFirst(RecordingFile(node.uri, node.name, dateTimeStr, wavDur))
+            try {
+                if (node.size == 0L) continue
+                val nameSplit = node.name.split(".")
+                if (nameSplit.size != 2) continue
+                val dateTime = dateFormat.parse(nameSplit[0]) ?: continue
+                val wavDur = (WavUtils.getWavDurationMs(node.uri) / 1000L).toInt()
+                val dateTimeStr = dateStrFormat.format(dateTime)
+                fileList.addFirst(RecordingFile(node.uri, node.name, dateTimeStr, wavDur))
+            } catch (e: Exception) {
+                continue
+            }
         }
         recordings.clear()
         recordings.addAll(fileList)
@@ -138,6 +143,8 @@ fun RecordingScreen(modifier: Modifier, vm: RecordingViewModel = viewModel()) {
                 if (!hasRecordPerms) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         PermsLauncher.request(POST_NOTIFICATIONS)
+                    } else {
+                        Toast.makeText(ContextHolder.appContext(), "在设置中打开通知权限", Toast.LENGTH_SHORT).show()
                     }
                 }
                 if (!writePerms && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -225,11 +232,11 @@ private fun RecordingFiles(recordings: List<RecordingFile>) {
     val lazyState = rememberLazyListState()
     LaunchedEffect(recordings.size) {
         if (recordings.isNotEmpty()) {
-            lazyState.scrollToItem(0)
+            lazyState.animateScrollToItem(0)
         }
     }
     if (recordings.isNotEmpty()) {
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 modifier = Modifier.height(40.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -248,7 +255,12 @@ private fun RecordingFiles(recordings: List<RecordingFile>) {
             }
             LazyColumn(
                 modifier = Modifier
-                    .weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), state = lazyState
+                    .overScrollVertical()
+                    .weight(1f)
+                    .padding(bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                state = lazyState,
+                flingBehavior = rememberOverscrollFlingBehavior { lazyState }
             ) {
                 items(recordings, key = { it.fileName }) {
                     RecordingFile(it)
@@ -263,7 +275,8 @@ private fun RecordingFile(file: RecordingFile) {
     val context = LocalContext.current
     Card(modifier = Modifier
         .fillMaxWidth()
-        .height(72.dp)
+        .height(68.dp)
+        .border(1.dp, Color.LightGray.copy(alpha = 0.8f), RoundedCornerShape(24.dp))
         .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
             if (FoldPickerLauncher.getWriteFolder() != null) {
                 WavPlayer.playWithSystemPlayer(uri = file.uri)
@@ -279,7 +292,7 @@ private fun RecordingFile(file: RecordingFile) {
             }
         },
         shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Row(

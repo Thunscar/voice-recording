@@ -41,7 +41,7 @@ object FoldPickerLauncher {
         if (::writeUri.isInitialized) {
             foldPickerLauncher.launch(writeUri)
         } else {
-            foldPickerLauncher.launch(null)
+            foldPickerLauncher.launch(Uri.parse(ContextHolder.appContext().getExternalFilesDir(null)?.path))
         }
     }
 

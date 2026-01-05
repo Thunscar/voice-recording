@@ -156,7 +156,6 @@ class VoiceRecordHandler {
                     //处理了1s的数据 开始结算
                     //有声音的数量大于每秒置信度个数 则认为有那一秒有声音
                     if (voiceInSecond > CONFIDENCE_SECOND) {
-                        Log.d(TAG, "has voice in one second")
                         //有声音
                         countNoVoice = 0
                         if (saveFileName == null) {
@@ -171,7 +170,6 @@ class VoiceRecordHandler {
                             Log.d(TAG, "save to file while over limit")
                         }
                     } else {
-                        Log.d(TAG, "has not voice in one second")
                         //无声音
                         countNoVoice++
                         if (countNoVoice >= NO_VOICE_TIMEOUT && saveFileName != null) {
@@ -261,18 +259,18 @@ class VoiceRecordHandler {
                 header[13] = 'm'.code.toByte()
                 header[14] = 't'.code.toByte()
                 header[15] = ' '.code.toByte()
-                writeInt(header, 16, 16)                        // Subchunk1Size
+                writeInt(header, 16, 16)                 // Subchunk1Size
                 writeShort(header, 20, 1.toShort())             // AudioFormat PCM = 1
                 writeShort(header, 22, channels.toShort())      // NumChannels
                 writeInt(header, 24, sampleRate)                // SampleRate
                 writeInt(header, 28, byteRate)                  // ByteRate
-                writeShort(header, 32, blockAlign) // BlockAlign
+                writeShort(header, 32, blockAlign)              // BlockAlign
                 writeShort(header, 34, 16.toShort())            // BitsPerSample
                 header[36] = 'd'.code.toByte()
                 header[37] = 'a'.code.toByte()
                 header[38] = 't'.code.toByte()
                 header[39] = 'a'.code.toByte()
-                writeInt(header, 40, dataSize)     // Subchunk2Size
+                writeInt(header, 40, dataSize)                  // Subchunk2Size
 
                 outputTarget.createOutputStream(ContextHolder.appContext(), fileName, "audio/wav").use { dos ->
                     dos.write(header)
